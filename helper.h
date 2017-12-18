@@ -18,12 +18,12 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //
 
-#include <windows.h> // pre-compiled headers
 #include <iomanip>          // {joj 27/5/14}
 #include <locale>           // {joj 7/6/14}
 
 #ifdef WIN32
 #include <intrin.h>         // intrinsics
+#include <windows.h> // pre-compiled headers
 #elif __linux__
 #include <unistd.h>         // usleep
 #include <cpuid.h>          // cpuid

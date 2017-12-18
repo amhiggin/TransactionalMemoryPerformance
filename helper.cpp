@@ -4,7 +4,6 @@
 // Copyright (C) 2011 - 2016 jones@scss.tcd.ie
 //
 
-#include <Windows.h>	    // pre-compiled headers
 #include <iostream>         // cout
 #include <iomanip>          // setprecision
 #include "helper.h"         //
@@ -13,6 +12,7 @@
 #ifdef WIN32
 #include <conio.h>          // _getch()
 #include <psapi.h>          // GetProcessMemoryInfo
+#include <Windows.h>	    // pre-compiled headers
 #elif __linux__
 #include <termios.h>        //
 #include <unistd.h>         //
