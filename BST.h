@@ -25,12 +25,14 @@ class BST {
 public:
 	Node* volatile root;
 	ALIGN(64) volatile long lock;
+#ifndef BST_HLE || BST_RTM
+	int nabort;
+#endif
 	
 	BST();
 
 	int contains(INT64 key);
-	int sizeOfTree(Node volatile *node);
-	void deleteTree(volatile Node* next);
+	int sizeOfTree(Node *node);
 
 	INT64 insertNode(Node *n);
 	Node* volatile removeNode(INT64 key);
@@ -43,6 +45,8 @@ public:
 	void acquireHLE();
 	void releaseHLE();
 #endif
-	// TODO implement methods for RTM
+#ifndef BST_RTM
+// TODO
+#endif
 
 };

@@ -38,7 +38,7 @@ using namespace std;                            // cout
 
 int key_ranges[5] = { 16, 256, 4096, 65535, 1048576 };
 int current_bound = 0;
-BST *tree;
+BST* tree;
 
 
 UINT64 tstart;                                  // start of test in ms
@@ -95,6 +95,8 @@ UINT64 cnt3;                                    // NB: in Debug mode allocated i
 
 #elif TREETYP == 2
 #define TREESTR "BST_RTM"
+#define ADDNODE(n)			addNodeRTM(n);
+#define REMOVENODE(key)		removeNodeRTM(key);
 
 #endif
 
@@ -108,6 +110,10 @@ void addNodeHLE(Node* n) {
 	tree->acquireHLE();
 	tree->insertNode(n);
 	tree->releaseHLE();
+}
+
+void addNodeRTM(Node* n) {
+	// TODO implement
 }
 
 Node* removeNodeTATASLock(int key) {
@@ -124,6 +130,11 @@ Node* removeNodeHLE(int key) {
 	return removed;
 }
 
+Node* removeNodeRTM(int key) {
+	// TODO implement
+	return NULL;
+}
+
 // This method of generating random key taken from https://stackoverflow.com/questions/5008804/generating-random-integer-from-a-range
 int generateRandomKey() {
 	std::random_device rd;     // only used once to initialise (seed) engine
@@ -138,6 +149,7 @@ int generateRandomKey() {
 void prefillBinaryTree(int min_value, int max_value) {
 	tree = new BST();
 
+	// Only want to make it half-full - restrict to half the number of possible values
 	int num_nodes = (max_value - min_value) / 2;
 
 	for (int i = 0; i < num_nodes; i++) {
@@ -233,6 +245,14 @@ int main()
     ncpu = getNumberOfCPUs();   // number of logical CPUs
     maxThread = 2 * ncpu;       // max number of threads
 
+	// Check whether HLE and RTM supported
+	if (!rtmSupported()) {
+		cout << "RTM is not supported!" << endl;
+	}
+	if (!hleSupported()) {
+		cout << "HLE is not supported!" << endl;
+	}
+
     //
     // get date
     //
@@ -327,21 +347,13 @@ int main()
 	cout << setw(14) << "treeSize";
 	cout << endl;
 
-	cout << "-----";              // sharing
-	cout << setw(9) << "--";        // nt
-	cout << setw(10) << "--";        // rt
-	cout << setw(14) << "---";      // ops
-	cout << setw(12) << "---";       // rel
-	cout << setw(14) << "------";
+	cout << "-----";              // current bound
+	cout << setw(9) << "--";	  // num threads
+	cout << setw(10) << "--";     // runtime  
+	cout << setw(14) << "---";    // operations
+	cout << setw(12) << "---";    // relative proportion of operations compared to 1 thread
+	cout << setw(14) << "------"; // size of the tree
 	cout << endl;
-    //
-    // boost process priority
-    // boost current thread priority to make sure all threads created before they start to run
-    //
-#ifdef WIN32
-//  SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
-//  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-#endif
 
     //
     // run tests
@@ -419,28 +431,8 @@ int main()
 
     cout << endl;
 
-    //
-    // output results so they can easily be pasted into a spread sheet from console window
-    //
-    setLocale();
-    cout << "bound/nt/rt/ops/rel/treeSize";
-#if TREETYP == 3
-    cout << "/aborts";
-#endif
-    cout << endl;
-    for (UINT i = 0; i < indx; i++) {
-        cout << r[i].sharing << "/"  << r[i].nt << "/" << r[i].rt << "/"  << r[i].ops << "/" << r[i].incs;
-#if TREETYP == 3
-        cout << "/" << r[i].aborts;
-#endif
-        cout << endl;
-    }
-    cout << endl;
-
     quit();
 
     return 0;
 
 }
-
-// eof

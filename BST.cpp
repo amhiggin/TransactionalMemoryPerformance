@@ -9,6 +9,9 @@ using namespace std;
 BST::BST() {
 	root = NULL;
 	lock = 0;
+#ifndef BST_HLE || BST_RTM
+	nabort = 0;
+#endif
 	return;
 }
 
@@ -108,20 +111,20 @@ Node* volatile BST::removeNode(INT64 key) {
 }
 
 
-// Recursive function to find the size of the tree
-int BST::sizeOfTree(Node volatile *node) {
+// Recursive function to find the size of the tree.
+int BST::sizeOfTree(Node *node) {
 	if (node == NULL) {
 		return 0;
 	} 
-	return sizeOfTree(node->left) + 1 + sizeOfTree(node->right);
+	return (sizeOfTree(node->left) + 1 + sizeOfTree(node->right));
 }
 
-void BST::deleteTree(Node volatile *next) {
+/*void BST::deleteTree(Node volatile *next) {
 	if (next != NULL) {
 		deleteTree(next->left);
 		deleteTree(next->right);
 	}
-}
+}*/
 
 
 /*
@@ -129,9 +132,15 @@ void BST::deleteTree(Node volatile *next) {
 */
 #ifndef BST_LOCK
 void BST::acquireLock() {
-	while (InterlockedExchange(&lock, 1)) // try for lock
+#ifdef WIN32
+while (InterlockedExchange(&lock, 1)) // try for lock
 		while (lock == 1) // wait until lock free
 			_mm_pause(); // instrinsic see next slide
+#elif __linux__
+	while (__sync_lock_test_and_set(&lock, 1))
+		while (lock == 1)
+			_mm_pause();
+#endif
 }
 
 void BST::releaseLock() {
@@ -145,15 +154,28 @@ void BST::releaseLock() {
 */
 #ifndef BST_HLE
 void BST::acquireHLE() {
+#ifdef WIN32
 	while (_InterlockedExchange_HLEAcquire(&lock, 1) == 1) {
 		do {
 			_mm_pause();
 		} while (lock == 1);
 	}
+#elif __linux
+	while (__atomic_exchange_n(&lock, 1, __ATOMIC_ACQUIRE | __ATOMIC_HLE_ACQUIRE)){																			\
+		nabort++;																
+		do {																		
+			_mm_pause();														
+		} while (lock == 1);													
+	}
+#endif
 }
 
 void BST::releaseHLE() {
+#ifdef WIN32
 	_Store_HLERelease(&lock, 0);
+#elif __linux__
+	__atomic_store_n(&lock, 0, __ATOMIC_RELEASE | __ATOMIC_HLE_RELEASE);
+#endif
 }
 #endif
 
