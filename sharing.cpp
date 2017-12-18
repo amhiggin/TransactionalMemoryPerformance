@@ -3,44 +3,13 @@
 //
 // Copyright (C) 2013 - 2016 jones@scss.tcd.ie
 //
-// This program is free software; you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free Software Foundation;
-// either version 2 of the License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
-// without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-// See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program; if not, write to the Free Software Foundation Inc.,
-// 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-//
-// 19/11/12 first version
-// 19/11/12 works with Win32 and x64
-// 21/11/12 works with Character Set: Not Set, Unicode Character Set or Multi-Byte Character
-// 21/11/12 output results so they can be easily pasted into a spreadsheet from console
-// 24/12/12 increment using (0) non atomic increment (1) InterlockedIncrement64 (2) InterlockedCompareExchange
-// 12/07/13 increment using (3) RTM (restricted transactional memory)
-// 18/07/13 added performance counters
-// 27/08/13 choice of 32 or 64 bit counters (32 bit can oveflow if run time longer than a couple of seconds)
-// 28/08/13 extended struct Result
-// 16/09/13 linux support (needs g++ 4.8 or later)
-// 21/09/13 added getWallClockMS()
-// 12/10/13 Visual Studio 2013 RC
-// 12/10/13 added FALSESHARING
-// 14/10/14 added USEPMS
-//
-
-//
-// NB: hints for pasting from console window
-// NB: Edit -> Select All followed by Edit -> Copy
-// NB: paste into Excel using paste "Use Text Import Wizard" option and select "/" as the delimiter
-//
 
 #include "stdafx.h"                             // pre-compiled headers
 #include <iostream>                             // cout
 #include <iomanip>                              // setprecision
 #include "helper.h"                             //
+#include "BST.h"
+#include <queue>
 
 using namespace std;                            // cout
 
@@ -51,7 +20,6 @@ using namespace std;                            // cout
 
 #define COUNTER64                               // comment for 32 bit counter
 //#define FALSESHARING                          // allocate counters in same cache line
-//#define USEPMS                                // use PMS counters
 
 #ifdef COUNTER64
 #define VINT    UINT64                          //  64 bit counter
@@ -67,60 +35,10 @@ using namespace std;                            // cout
 #define GINDX(n)    (g+n*lineSz/sizeof(VINT))   //
 #endif
 
-//
-// OPTYP
-//
-// 0:inc
-// 1:InterlockedIncrement
-// 2:InterlockedCompareExchange
-// 3:RTM (restricted transactional memory)
-//
+int key_ranges[5] = { 16, 256, 4096, 65535, 1048576 };
+int current_bound = 0;
+BST *tree;
 
-#define OPTYP       0                           // set op type
-
-#if OPTYP == 0
-
-#define OPSTR       "inc"
-#define INC(g)      (*g)++;
-
-#elif OPTYP == 1
-
-#ifdef COUNTER64
-#define OPSTR       "InterlockedIncrement64"
-#define INC(g)      InterlockedIncrement64((volatile LONG64*) g)
-#else
-#define OPSTR       "InterlockedIncrement"
-#define INC(g)      InterlockedIncrement(g)
-#endif
-
-#elif OPTYP == 2
-
-#ifdef COUNTER64
-#define OPSTR       "InterlockedCompareExchange64"
-#define INC(g)      do {                                                                        \
-                        x = *g;                                                                 \
-                    } while (InterlockedCompareExchange64((volatile LONG64*) g, x+1, x) != x);
-#else
-#define OPSTR       "InterlockedCompareExchange"
-#define INC(g)      do {                                                                        \
-                        x = *g;                                                                 \
-                    } while (InterlockedCompareExchange(g, x+1, x) != x);
-#endif
-
-#elif OPTYP == 3
-
-#define OPSTR       "RTM (restricted transactional memory)"
-#define INC(g)      {                                                                           \
-                        UINT status = _xbegin();                                                \
-                        if (status == _XBEGIN_STARTED) {                                        \
-                            (*g)++;                                                             \
-                            _xend();                                                            \
-                        } else {                                                                \
-                            nabort++;                                                           \
-                            InterlockedIncrement64((volatile LONG64*)g);                        \
-                        }                                                                       \
-                    }
-#endif
 
 UINT64 tstart;                                  // start of test in ms
 int sharing;                                    // % sharing
@@ -130,7 +48,7 @@ int maxThread;                                  // max # of threads
 THREADH *threadH;                               // thread handles
 UINT64 *ops;                                    // for ops per thread
 
-#if OPTYP == 3
+#if TREETYP == 3
 UINT64 *aborts;                                 // for counting aborts
 #endif
 
@@ -156,82 +74,90 @@ ALIGN(64) UINT64 cnt1;
 ALIGN(64) UINT64 cnt2;
 UINT64 cnt3;                                    // NB: in Debug mode allocated in cache line occupied by cnt0
 
-//
-// PMS
-//
-#ifdef USEPMS
+												/*
+												TREETYP
+												Used to switch between TATAS lock(0), HLE (1), RTM (2).
+												*/
 
-UINT64 *fixedCtr0;                              // fixed counter 0 counts
-UINT64 *fixedCtr1;                              // fixed counter 1 counts
-UINT64 *fixedCtr2;                              // fixed counter 2 counts
-UINT64 *pmc0;                                   // performance counter 0 counts
-UINT64 *pmc1;                                   // performance counter 1 counts
-UINT64 *pmc2;                                   // performance counter 2 counts
-UINT64 *pmc3;                                   // performance counter 2 counts
 
-//
-// zeroCounters
-//
-void zeroCounters()
-{
-    for (UINT i = 0; i < ncpu; i++) {
-        for (int j = 0; j < 4; j++) {
-            if (j < 3)
-                writeFIXED_CTR(i, j, 0);
-            writePMC(i, j, 0);
-        }
-    }
-}
+#define TREETYP	0							//set up tree type
 
-//
-// void setupCounters()
-//
-void setupCounters()
-{
-    if (!openPMS())
-        quit();
+#if TREETYPE == 0
+#define TREESTR "BST_LOCK"
+#define ADDNODE(n)			addNodeTATASLock(n);
+#define REMOVENODE(key)		removeNodeTATASLock(key);
 
-    //
-    // enable FIXED counters
-    //
-    for (UINT i = 0; i < ncpu; i++) {
-        writeFIXED_CTR_CTRL(i, (FIXED_CTR_RING123 << 8) | (FIXED_CTR_RING123 << 4) | FIXED_CTR_RING123);
-        writePERF_GLOBAL_CTRL(i, (0x07ULL << 32) | 0x0f);
-    }
+#elif TREETYP == 1
+#define TREESTR "BST__HLE"
+#define ADDNODE(n)			addNodeHLE(n);
+#define REMOVENODE(key)		removeNodeHLE(key);
 
-#if OPTYP == 3
-
-    //
-    // set up and enable general purpose counters
-    //
-    for (UINT i = 0; i < ncpu; i++) {
-        writePERFEVTSEL(i, 0, PERFEVTSEL_EN | PERFEVTSEL_USR | RTM_RETIRED_START);
-        writePERFEVTSEL(i, 1, PERFEVTSEL_EN | PERFEVTSEL_USR | RTM_RETIRED_COMMIT);
-        writePERFEVTSEL(i, 2, PERFEVTSEL_IN_TXCP | PERFEVTSEL_IN_TX | PERFEVTSEL_EN | PERFEVTSEL_USR | CPU_CLK_UNHALTED_THREAD_P);  // NB: TXCP in PMC2 ONLY
-        writePERFEVTSEL(i, 3, PERFEVTSEL_IN_TX | PERFEVTSEL_EN | PERFEVTSEL_USR | CPU_CLK_UNHALTED_THREAD_P);
-    }
+#elif TREETYP == 2
+#define TREESTR "BST_RTM"
 
 #endif
 
+void addNodeTATASLock(Node* n) {
+	tree->acquireLock();
+	tree->insertNode(n);
+	tree->releaseLock();
 }
 
-//
-// void saveCounters()
-//
-void saveCounters()
-{
-    for (UINT i = 0; i < ncpu; i++) {
-        fixedCtr0[indx*ncpu + i] = readFIXED_CTR(i, 0);
-        fixedCtr1[indx*ncpu + i] = readFIXED_CTR(i, 1);
-        fixedCtr2[indx*ncpu + i] = readFIXED_CTR(i, 2);
-        pmc0[indx*ncpu + i] = readPMC(i, 0);
-        pmc1[indx*ncpu + i] = readPMC(i, 1);
-        pmc2[indx*ncpu + i] = readPMC(i, 2);
-        pmc3[indx*ncpu + i] = readPMC(i, 3);
-    }
+void addNodeHLE(Node* n) {
+	tree->acquireHLE();
+	tree->insertNode(n);
+	tree->releaseHLE();
 }
 
-#endif
+Node* removeNodeTATASLock(int key) {
+	tree->acquireLock();
+	Node* removed = tree->removeNode(key);
+	tree->releaseLock();
+	printf("Removed node %I64d\n", removed->key);
+	return removed;
+}
+
+Node* removeNodeHLE(int key) {
+	tree->acquireHLE();
+	Node* removed = tree->removeNode(key);
+	tree->releaseHLE();
+	return removed;
+}
+
+// Generate a pseudo-random integer.
+int generateRandomKey() {
+	UINT *random_number = new UINT;
+	*random_number = rand(*random_number);
+	int random_key = *random_number % key_ranges[current_bound];
+	printf("Random key is: %d\n", random_key);
+	return random_key;
+}
+
+// This method should pre-fill the binary tree so that it is half full starting off.
+void prefillBinaryTree(int min_value, int max_value) {
+	tree = new BST();
+
+	int num_nodes = (max_value - min_value) / 2;
+
+	for (int i = 0; i < num_nodes; i++) {
+		int key = generateRandomKey();
+		Node* n = new Node(key);
+		tree->insertNode(n);
+	}
+	printf("Prefilled binary tree to half-full.\n");
+}
+
+// ReuseQ is used to prevent unnecessary inhibition of parallelism
+queue<Node*> make_empty_reuseq() {
+	queue<Node*> ReuseQueue;
+	for (int i = 0; i < 1000; i++) {
+		ReuseQueue.push(new Node(0));
+	}
+	printf("Initialised empty reuseQ successfully.\n");
+	return ReuseQueue;
+}
+
+
 
 //
 // worker
@@ -245,74 +171,64 @@ WORKER worker(void *vthread)
     volatile VINT *gt = GINDX(thread);
     volatile VINT *gs = GINDX(maxThread);
 
-#if OPTYP == 2
-    VINT x;
-#elif OPTYP == 3
-    UINT64 nabort = 0;
-#endif
-
+	// Make our reuseQ for this worker
+	queue<Node*> ReuseQueue = make_empty_reuseq();
+	
     runThreadOnCPU(thread % ncpu);
 
     while (1) {
+		for (int i = 0; i < NOPS; i++)
+		{
+			
+			int random_key = generateRandomKey();
+			// check last bit of random num
+			int update = random_key & 1;
 
-        //
-        // do some work
-        //
-        for (int i = 0; i < NOPS / 4; i++) {
+			if (update == 1) {
+				Node *n_add;
 
-            switch (sharing) {
-            case 0:
+				if (!ReuseQueue.empty()) {
+					// Take a node off the reuseQ
+					n_add = ReuseQueue.front();
+					ReuseQueue.pop();
+					n_add->key = random_key;
+					printf("Used node off the ReuseQ\n");
+				} else {
+					n_add = new Node(random_key);
+				}
+				ADDNODE(n_add);
 
-                INC(gt);
-                INC(gt);
-                INC(gt);
-                INC(gt);
-                break;
+			} else {
+				// We are removing this node if it exists
+				Node* n_remove = REMOVENODE(random_key);
+				
+				if (n_remove != NULL) {
+					// Add to reuseQ
+					n_remove->left = NULL;
+					n_remove->right = NULL;
+					ReuseQueue.push(n_remove);
+				}
+			}
+		}
+		//record the number of operations performed
+		n += NOPS;
 
-            case 25:
-                INC(gt);
-                INC(gt);
-                INC(gt);
-                INC(gs);
-                break;
-
-            case 50:
-                INC(gt);
-                INC(gs);
-                INC(gt);
-                INC(gs);
-                break;
-
-            case 75:
-                INC(gt);
-                INC(gs);
-                INC(gs);
-                INC(gs);
-                break;
-
-            case 100:
-                INC(gs);
-                INC(gs);
-                INC(gs);
-                INC(gs);
-
-            }
-        }
-        n += NOPS;
-
-        //
-        // check if runtime exceeded
-        //
-        if ((getWallClockMS() - tstart) > NSECONDS*1000)
-            break;
-
+		//break out of while loop if runtime exceeded
+		if ((getWallClockMS() - tstart) > NSECONDS * 1000)
+		{
+			break;
+		}
     }
 
     ops[thread] = n;
-#if OPTYP == 3
+
+#if TREETYP == 3
     aborts[thread] = nabort;
 #endif
-    return 0;
+	// TODO deallocate all of the memory given to the  tree nodes before exit
+	tree->deleteTree(tree->root);
+	tree->root = NULL;
+	return 0;
 
 }
 
@@ -339,7 +255,7 @@ int main()
 #else
     cout << " RELEASE";
 #endif
-    cout << " [" << OPSTR << "]" << " NCPUS=" << ncpu << " RAM=" << (getPhysicalMemSz() + GB - 1) / GB << "GB " << dateAndTime << endl;
+    cout << " [" << TREESTR << "]" << " NCPUS=" << ncpu << " RAM=" << (getPhysicalMemSz() + GB - 1) / GB << "GB " << dateAndTime << endl;
 #ifdef COUNTER64
     cout << "COUNTER64";
 #else
@@ -348,15 +264,9 @@ int main()
 #ifdef FALSESHARING
     cout << " FALSESHARING";
 #endif
-    cout << " NOPS=" << NOPS << " NSECONDS=" << NSECONDS << " OPTYP=" << OPTYP;
-#ifdef USEPMS
-    cout << " USEPMS";
-#endif
+    cout << " NOPS=" << NOPS << " NSECONDS=" << NSECONDS << " TREETYP=" << TREESTR;
     cout << endl;
     cout << "Intel" << (cpu64bit() ? "64" : "32") << " family " << cpuFamily() << " model " << cpuModel() << " stepping " << cpuStepping() << " " << cpuBrandString() << endl;
-#ifdef USEPMS
-    cout << "performance monitoring version " << pmversion() << ", " << nfixedCtr() << " x " << fixedCtrW() << "bit fixed counters, " << npmc() << " x " << pmcW() << "bit performance counters" << endl;
-#endif
 
     //
     // get cache info
@@ -371,7 +281,7 @@ int main()
     if ((&cnt3 >= &cnt2) && (&cnt3 < (&cnt2 + lineSz / sizeof(UINT64))))
         cout << "Warning: cnt2 shares cache line used by cnt1" << endl;
 
-#if OPTYP == 3
+#if TREETYP == 3
 
     //
     // check if RTM supported
@@ -394,7 +304,7 @@ int main()
     threadH = (THREADH*) ALIGNED_MALLOC(maxThread*sizeof(THREADH), lineSz);             // thread handles
     ops = (UINT64*) ALIGNED_MALLOC(maxThread*sizeof(UINT64), lineSz);                   // for ops per thread
 
-#if OPTYP == 3
+#if TREETYP == 3
     aborts = (UINT64*) ALIGNED_MALLOC(maxThread*sizeof(UINT64), lineSz);                // for counting aborts
 #endif
 
@@ -404,29 +314,10 @@ int main()
     g = (VINT*) ALIGNED_MALLOC((maxThread + 1)*lineSz, lineSz);                         // local and shared global variables
 #endif
 
-#ifdef USEPMS
-
-    fixedCtr0 = (UINT64*) ALIGNED_MALLOC(5*maxThread*ncpu*sizeof(UINT64), lineSz);      // for fixed counter 0 results
-    fixedCtr1 = (UINT64*) ALIGNED_MALLOC(5*maxThread*ncpu*sizeof(UINT64), lineSz);      // for fixed counter 1 results
-    fixedCtr2 = (UINT64*) ALIGNED_MALLOC(5*maxThread*ncpu*sizeof(UINT64), lineSz);      // for fixed counter 2 results
-    pmc0 = (UINT64*) ALIGNED_MALLOC(5*maxThread*ncpu*sizeof(UINT64), lineSz);           // for performance counter 0 results
-    pmc1 = (UINT64*) ALIGNED_MALLOC(5*maxThread*ncpu*sizeof(UINT64), lineSz);           // for performance counter 1 results
-    pmc2 = (UINT64*) ALIGNED_MALLOC(5*maxThread*ncpu*sizeof(UINT64), lineSz);           // for performance counter 2 results
-    pmc3 = (UINT64*) ALIGNED_MALLOC(5*maxThread*ncpu*sizeof(UINT64), lineSz);           // for performance counter 3 results
-
-#endif
-
     r = (Result*) ALIGNED_MALLOC(5*maxThread*sizeof(Result), lineSz);                   // for results
     memset(r, 0, 5*maxThread*sizeof(Result));                                           // zero
 
     indx = 0;
-
-#ifdef USEPMS
-    //
-    // set up performance monitor counters
-    //
-    setupCounters();
-#endif
 
     //
     // use thousands comma separator
@@ -441,7 +332,7 @@ int main()
     cout << setw(6) << "rt";
     cout << setw(16) << "ops";
     cout << setw(6) << "rel";
-#if OPTYP == 3
+#if TREETYP == 3
     cout << setw(8) << "commit";
 #endif
     cout << endl;
@@ -451,7 +342,7 @@ int main()
     cout << setw(6) << "--";        // rt
     cout << setw(16) << "---";      // ops
     cout << setw(6) << "---";       // rel
-#if OPTYP == 3
+#if TREETYP == 3
     cout << setw(8) << "------";
 #endif
     cout << endl;
@@ -469,10 +360,13 @@ int main()
     // run tests
     //
     UINT64 ops1 = 1;
+	current_bound = 0;
 
-    for (sharing = 0; sharing <= 100; sharing += 25) {
-
-        for (int nt = 1; nt <= maxThread; nt *= 2, indx++) {
+	for (current_bound = 0; current_bound < sizeof(key_ranges)/sizeof(int); current_bound++) {
+		// Half-fill the binary tree to start with, within the range of values given.
+		prefillBinaryTree(0, key_ranges[current_bound]);
+		
+		for (int nt = 1; nt <= maxThread; nt++, indx++) {
 
             //
             //  zero shared memory
@@ -480,10 +374,6 @@ int main()
             for (int thread = 0; thread < nt; thread++)
                 *(GINDX(thread)) = 0;   // thread local
             *(GINDX(maxThread)) = 0;    // shared
-
-#ifdef USEPMS
-            zeroCounters();             // zero PMS counters
-#endif
 
             //
             // get start time
@@ -502,17 +392,13 @@ int main()
             waitForThreadsToFinish(nt, threadH);
             UINT64 rt = getWallClockMS() - tstart;
 
-#ifdef USEPMS
-            saveCounters();             // save PMS counters
-#endif
-
             //
             // save results and output summary to console
             //
             for (int thread = 0; thread < nt; thread++) {
                 r[indx].ops += ops[thread];
                 r[indx].incs += *(GINDX(thread));
-#if OPTYP == 3
+#if TREETYP == 3
                 r[indx].aborts += aborts[thread];
 #endif
             }
@@ -523,13 +409,13 @@ int main()
             r[indx].nt = nt;
             r[indx].rt = rt;
 
-            cout << setw(6) << sharing << "%";
+            //cout << setw(6) << sharing << "%";
             cout << setw(4) << nt;
             cout << setw(6) << fixed << setprecision(2) << (double) rt / 1000;
             cout << setw(16) << r[indx].ops;
             cout << setw(6) << fixed << setprecision(2) << (double) r[indx].ops / ops1;
 
-#if OPTYP == 3
+#if TREETYP == 3
 
             cout << setw(7) << fixed << setprecision(0) << 100.0 * (r[indx].ops - r[indx].aborts) / r[indx].ops << "%";
 
@@ -557,76 +443,18 @@ int main()
     //
     setLocale();
     cout << "sharing/nt/rt/ops/incs";
-#if OPTYP == 3
+#if TREETYP == 3
     cout << "/aborts";
 #endif
     cout << endl;
     for (UINT i = 0; i < indx; i++) {
         cout << r[i].sharing << "/"  << r[i].nt << "/" << r[i].rt << "/"  << r[i].ops << "/" << r[i].incs;
-#if OPTYP == 3
+#if TREETYP == 3
         cout << "/" << r[i].aborts;
 #endif
         cout << endl;
     }
     cout << endl;
-
-#ifdef USEPMS
-
-    //
-    // output PMS counters
-    //
-    cout << "FIXED_CTR0 instructions retired" << endl;
-    for (UINT i = 0; i < indx; i++) {
-        for (UINT j = 0; j < ncpu; j++)
-            cout << ((j) ? "/" : "") << fixedCtr0[i*ncpu + j];
-        cout << endl;
-    }
-    cout << endl;
-    cout << "FIXED_CTR1 unhalted core cycles" << endl;
-    for (UINT i = 0; i < indx; i++) {
-        for (UINT j = 0; j < ncpu; j++)
-            cout << ((j) ? "/" : "") << fixedCtr1[i*ncpu + j];
-        cout << endl;
-    }
-    cout << endl;
-    cout << "FIXED_CTR2 unhalted reference cycles" << endl;
-    for (UINT i = 0; i < indx; i++) {
-        for (UINT j = 0; j < ncpu; j++ )
-            cout << ((j) ? "/" : "") << fixedCtr2[i*ncpu + j];
-        cout << endl;
-    }
-    cout << endl;
-    cout << "PMC0 RTM RETIRED START" << endl;
-    for (UINT i = 0; i < indx; i++) {
-        for (UINT j = 0; j < ncpu; j++ )
-            cout << ((j) ? "/" : "") << pmc0[i*ncpu + j];
-        cout << endl;
-    }
-    cout << endl;
-    cout << "PMC1 RTM RETIRED COMMIT" << endl;
-    for (UINT i = 0; i < indx; i++) {
-        for (UINT j = 0; j < ncpu; j++ )
-            cout << ((j) ? "/" : "") << pmc1[i*ncpu + j];
-        cout << endl;
-    }
-    cout << endl;
-    cout << "PMC2 unhalted core cycles in committed transactions" << endl;
-    for (UINT i = 0; i < indx; i++) {
-        for (UINT j = 0; j < ncpu; j++ )
-            cout << ((j) ? "/" : "") << pmc2[i*ncpu + j];
-        cout << endl;
-    }
-    cout << endl;
-    cout << "PMC3 unhalted core cycles in committed and aborted transactions" << endl;
-    for (UINT i = 0; i < indx; i++) {
-        for (UINT j = 0; j < ncpu; j++ )
-            cout << ((j) ? "/" : "") << pmc3[i*ncpu + j];
-        cout << endl;
-    }
-
-    closePMS();                 // close PMS counters
-
-#endif
 
     quit();
 
