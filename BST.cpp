@@ -113,7 +113,7 @@ int BST::sizeOfTree(Node volatile *node) {
 	if (node == NULL) {
 		return 0;
 	} 
-	return(sizeOfTree(node->left) + 1 + sizeOfTree(node->right));
+	return sizeOfTree(node->left) + 1 + sizeOfTree(node->right);
 }
 
 void BST::deleteTree(Node volatile *next) {
@@ -125,20 +125,17 @@ void BST::deleteTree(Node volatile *next) {
 
 
 /*
-TATAS Lock methods.
+	TATAS Lock methods.
 */
 #ifndef BST_LOCK
 void BST::acquireLock() {
-	printf("Trying to acquire the lock...");
 	while (InterlockedExchange(&lock, 1)) // try for lock
 		while (lock == 1) // wait until lock free
 			_mm_pause(); // instrinsic see next slide
-	printf("Acquired lock\n");
 }
 
 void BST::releaseLock() {
 	lock = 0;
-	printf("Released lock\n");
 }
 #endif
 

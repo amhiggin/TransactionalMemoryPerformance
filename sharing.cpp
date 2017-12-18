@@ -10,6 +10,7 @@
 #include "helper.h"                             //
 #include "BST.h"
 #include <queue>
+#include <random>
 
 using namespace std;                            // cout
 
@@ -80,9 +81,9 @@ UINT64 cnt3;                                    // NB: in Debug mode allocated i
 												*/
 
 
-#define TREETYP	0							//set up tree type
+#define TREETYP	1							//set up tree type
 
-#if TREETYPE == 0
+#if TREETYP == 0
 #define TREESTR "BST_LOCK"
 #define ADDNODE(n)			addNodeTATASLock(n);
 #define REMOVENODE(key)		removeNodeTATASLock(key);
@@ -113,7 +114,6 @@ Node* removeNodeTATASLock(int key) {
 	tree->acquireLock();
 	Node* removed = tree->removeNode(key);
 	tree->releaseLock();
-	printf("Removed node %I64d\n", removed->key);
 	return removed;
 }
 
@@ -124,12 +124,13 @@ Node* removeNodeHLE(int key) {
 	return removed;
 }
 
-// Generate a pseudo-random integer.
+// This method of generating random key taken from https://stackoverflow.com/questions/5008804/generating-random-integer-from-a-range
 int generateRandomKey() {
-	UINT *random_number = new UINT;
-	*random_number = rand(*random_number);
-	int random_key = *random_number % key_ranges[current_bound];
-	printf("Random key is: %d\n", random_key);
+	std::random_device rd;     // only used once to initialise (seed) engine
+	std::mt19937 rng(rd());    // random-number engine used (Mersenne-Twister in this case)
+	std::uniform_int_distribution<int> uni(0, key_ranges[current_bound]); // guaranteed unbiased
+
+	auto random_key = uni(rng);
 	return random_key;
 }
 
@@ -144,7 +145,6 @@ void prefillBinaryTree(int min_value, int max_value) {
 		Node* n = new Node(key);
 		tree->insertNode(n);
 	}
-	printf("Prefilled binary tree to half-full.\n");
 }
 
 // ReuseQ is used to prevent unnecessary inhibition of parallelism
@@ -153,7 +153,6 @@ queue<Node*> make_empty_reuseq() {
 	for (int i = 0; i < 1000; i++) {
 		ReuseQueue.push(new Node(0));
 	}
-	printf("Initialised empty reuseQ successfully.\n");
 	return ReuseQueue;
 }
 
@@ -181,8 +180,7 @@ WORKER worker(void *vthread)
 		{
 			
 			int random_key = generateRandomKey();
-			// check last bit of random num
-			int update = random_key & 1;
+			int update = random_key % 2;
 
 			if (update == 1) {
 				Node *n_add;
@@ -192,7 +190,6 @@ WORKER worker(void *vthread)
 					n_add = ReuseQueue.front();
 					ReuseQueue.pop();
 					n_add->key = random_key;
-					printf("Used node off the ReuseQ\n");
 				} else {
 					n_add = new Node(random_key);
 				}
@@ -225,11 +222,7 @@ WORKER worker(void *vthread)
 #if TREETYP == 3
     aborts[thread] = nabort;
 #endif
-	// TODO deallocate all of the memory given to the  tree nodes before exit
-	tree->deleteTree(tree->root);
-	tree->root = NULL;
 	return 0;
-
 }
 
 //
@@ -326,27 +319,21 @@ int main()
 
     //
     // header
-    //
-    cout << "sharing";
-    cout << setw(4) << "nt";
-    cout << setw(6) << "rt";
-    cout << setw(16) << "ops";
-    cout << setw(6) << "rel";
-#if TREETYP == 3
-    cout << setw(8) << "commit";
-#endif
-    cout << endl;
+	cout << "bound";
+	cout << setw(9) << "nt";
+	cout << setw(10) << "rt";
+	cout << setw(14) << "ops";
+	cout << setw(12) << "rel";
+	cout << setw(14) << "treeSize";
+	cout << endl;
 
-    cout << "-------";              // sharing
-    cout << setw(4) << "--";        // nt
-    cout << setw(6) << "--";        // rt
-    cout << setw(16) << "---";      // ops
-    cout << setw(6) << "---";       // rel
-#if TREETYP == 3
-    cout << setw(8) << "------";
-#endif
-    cout << endl;
-
+	cout << "-----";              // sharing
+	cout << setw(9) << "--";        // nt
+	cout << setw(10) << "--";        // rt
+	cout << setw(14) << "---";      // ops
+	cout << setw(12) << "---";       // rel
+	cout << setw(14) << "------";
+	cout << endl;
     //
     // boost process priority
     // boost current thread priority to make sure all threads created before they start to run
@@ -363,10 +350,10 @@ int main()
 	current_bound = 0;
 
 	for (current_bound = 0; current_bound < sizeof(key_ranges)/sizeof(int); current_bound++) {
-		// Half-fill the binary tree to start with, within the range of values given.
-		prefillBinaryTree(0, key_ranges[current_bound]);
 		
 		for (int nt = 1; nt <= maxThread; nt++, indx++) {
+			// Half-fill the binary tree to start with, within the range of values given.
+			prefillBinaryTree(0, key_ranges[current_bound]);
 
             //
             //  zero shared memory
@@ -395,35 +382,29 @@ int main()
             //
             // save results and output summary to console
             //
-            for (int thread = 0; thread < nt; thread++) {
-                r[indx].ops += ops[thread];
-                r[indx].incs += *(GINDX(thread));
+			for (int thread = 0; thread < nt; thread++)
+			{
+				r[indx].ops += ops[thread];
+				r[indx].incs += *(GINDX(thread));
+			}
+			r[indx].incs += *(GINDX(maxThread));
+			if ((sharing == 0) && (nt == 1))
+				ops1 = r[indx].ops;
+			r[indx].sharing = sharing;
+			r[indx].nt = nt;
+			r[indx].rt = rt;
+
+			cout << setw(8) << key_ranges[current_bound];
+			cout << setw(8) << nt;
+			cout << setw(10) << fixed << setprecision(2) << (double)rt / 1000;
+			cout << setw(14) << r[indx].ops;
+			cout << setw(12) << fixed << setprecision(2) << (double)r[indx].ops / ops1;
+			cout << setw(14) << tree->sizeOfTree(tree->root);
+
+
 #if TREETYP == 3
-                r[indx].aborts += aborts[thread];
-#endif
-            }
-            r[indx].incs += *(GINDX(maxThread));
-            if ((sharing == 0) && (nt == 1))
-                ops1 = r[indx].ops;
-            r[indx].sharing = sharing;
-            r[indx].nt = nt;
-            r[indx].rt = rt;
-
-            //cout << setw(6) << sharing << "%";
-            cout << setw(4) << nt;
-            cout << setw(6) << fixed << setprecision(2) << (double) rt / 1000;
-            cout << setw(16) << r[indx].ops;
-            cout << setw(6) << fixed << setprecision(2) << (double) r[indx].ops / ops1;
-
-#if TREETYP == 3
-
             cout << setw(7) << fixed << setprecision(0) << 100.0 * (r[indx].ops - r[indx].aborts) / r[indx].ops << "%";
-
 #endif
-
-            if (r[indx].ops != r[indx].incs)
-                cout << " ERROR incs " << setw(3) << fixed << setprecision(0) << 100.0 * r[indx].incs / r[indx].ops << "% effective";
-
             cout << endl;
 
             //
@@ -442,7 +423,7 @@ int main()
     // output results so they can easily be pasted into a spread sheet from console window
     //
     setLocale();
-    cout << "sharing/nt/rt/ops/incs";
+    cout << "bound/nt/rt/ops/rel/treeSize";
 #if TREETYP == 3
     cout << "/aborts";
 #endif

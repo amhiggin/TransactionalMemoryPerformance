@@ -3,8 +3,6 @@
 */
 
 #include <iostream>
-#include "TestAndTestAndSetLock.h"
-#include "HLE.h"
 #include "helper.h"
 using namespace std;
 
