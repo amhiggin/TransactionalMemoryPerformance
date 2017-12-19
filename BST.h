@@ -24,6 +24,7 @@ class BST {
 
 public:
 	Node* volatile root;
+	// Store lock in own cache line for performance
 	ALIGN(64) volatile long lock;
 	int nabort; // HLE/RTM
 	
@@ -31,6 +32,7 @@ public:
 
 	int contains(INT64 key);
 	int sizeOfTree(Node *node);
+	void deleteTree(Node volatile *next);
 	int computeHeight(Node *n);
 	bool checkTreeBalanced();
 

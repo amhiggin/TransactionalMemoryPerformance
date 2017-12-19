@@ -18,6 +18,12 @@ using namespace std;                            // cout
 #define GB          (K*K*K)                     //
 #define NOPS        10000                       //
 #define NSECONDS    2                           // run each test for NSECONDS
+#define REUSEQ_SIZE 100000
+
+// Enum constants
+#define TRANSACTION 0
+#define LOCK 1
+#define MAXATTEMPT 8
 
 #define COUNTER64                               // comment for 32 bit counter
 //#define FALSESHARING                          // allocate counters in same cache line
@@ -75,13 +81,13 @@ ALIGN(64) UINT64 cnt1;
 ALIGN(64) UINT64 cnt2;
 UINT64 cnt3;                                    // NB: in Debug mode allocated in cache line occupied by cnt0
 
-												/*
-												TREETYP
-												Used to switch between TATAS lock(0), HLE (1), RTM (2).
-												*/
+/*
+	TREETYP
+	Used to switch between TATAS lock(0), HLE (1), RTM (2).
+*/
 
 
-#define TREETYP	0							//set up tree type
+#define TREETYP	2							//set up tree type
 
 #if TREETYP == 0
 #define TREESTR "BST_LOCK"
@@ -97,6 +103,7 @@ UINT64 cnt3;                                    // NB: in Debug mode allocated i
 
 #elif TREETYP == 2
 #define TREESTR "BST_RTM"
+#define BST_RTM
 #define ADDNODE(n)			addNodeRTM(n);
 #define REMOVENODE(key)		removeNodeRTM(key);
 
@@ -130,16 +137,104 @@ Node* removeNodeHLE(int key) {
 	tree->releaseHLE();
 	return removed;
 }
-
 #endif
 #ifdef BST_RTM
 void addNodeRTM(Node* n) {
-	// TODO implement
+	int state = TRANSACTION;
+	int attempt = 1; // number of attempts
+	
+	while (1) {
+		UINT status = _XBEGIN_STARTED; 
+		if (state == TRANSACTION) { 
+			// execute transactionally
+			status = _xbegin(); 
+		} else { 
+			// Execute non-transactional path.
+			tree->acquireLock();
+		}
+		
+		if (status == _XBEGIN_STARTED) { 
+			if (state == TRANSACTION && tree->lock) {// if executing transactionally, add lock to readset so transaction will abort if lock obtained by another thread
+				_xabort(0xA0); // abort immediately if lock already set
+			}
+			// Here is where we add the node
+			tree->insertNode(n);
+
+			if (state == TRANSACTION) { 
+				// end transaction ...
+				_xend(); 
+			} else { 
+				// Release lock
+				tree->releaseLock();
+			}
+			break;
+		}
+		else { 
+			// Transaction aborted
+			if (tree->lock) { 
+				do { 
+					_mm_pause();
+				} while (tree->lock);
+			}
+			else { 
+				volatile UINT64 wait = attempt << 4; // initialise wait and delay by ...
+				while (wait--); 
+			}
+			if (++attempt >= MAXATTEMPT) 
+				state = LOCK; // execute non transactionally by obtaining lock
+		}
+	}
 }
 
 Node* removeNodeRTM(int key) {
-	// TODO implement
-	return NULL;
+	int state = TRANSACTION; // TRANSACTION = 0 LOCK = 1
+	int attempt = 1; // number of attempts
+	Node *removed = NULL;
+
+	while (1) {
+		UINT status = _XBEGIN_STARTED;
+		if (state == TRANSACTION) {
+			// execute transactionally
+			status = _xbegin();
+		}
+		else {
+			// Execute non-transactional path.
+			tree->acquireLock();
+		}
+
+		if (status == _XBEGIN_STARTED) {
+			if (state == TRANSACTION && tree->lock) {// if executing transactionally, add lock to readset so transaction will abort if lock obtained by another thread
+				_xabort(0xA0); // abort immediately if lock already set
+			}
+			// Here is where we remove the node
+			removed = tree->removeNode(key);
+
+			if (state == TRANSACTION) {
+				// end transaction ...
+				_xend();
+			}
+			else {
+				// Release lock
+				tree->releaseLock();
+			}
+			break;
+		}
+		else {
+			// Transaction aborted
+			if (tree->lock) {
+				do {
+					_mm_pause();
+				} while (tree->lock);
+			}
+			else {
+				volatile UINT64 wait = attempt << 4; // initialise wait and delay by ...
+				while (wait--);
+			}
+			if (++attempt >= MAXATTEMPT)
+				state = LOCK; // execute non transactionally by obtaining lock
+		}
+	}
+	return removed;
 }
 #endif
 
@@ -167,16 +262,14 @@ void prefillBinaryTree(int min_value, int max_value) {
 	}
 }
 
-// ReuseQ is used to prevent unnecessary inhibition of parallelism
+// ReuseQ is used to prevent unnecessary inhibition of parallelism from calls to Malloc.
 queue<Node*> make_empty_reuseq() {
 	queue<Node*> ReuseQueue;
-	for (int i = 0; i < 1000; i++) {
+	for (int i = 0; i < REUSEQ_SIZE; i++) {
 		ReuseQueue.push(new Node(0));
 	}
 	return ReuseQueue;
 }
-
-
 
 //
 // worker
@@ -206,19 +299,23 @@ WORKER worker(void *vthread)
 				Node *n_add;
 
 				if (!ReuseQueue.empty()) {
-					// Take a node off the reuseQ
+					// Take a node off the reuseQ to enhance performance
 					n_add = ReuseQueue.front();
 					ReuseQueue.pop();
+					// Overwrite with our key
 					n_add->key = random_key;
 				} else {
+					// Have to use Malloc :(
 					n_add = new Node(random_key);
 				}
+				// Don't care if this is successful - count the operation anyway
 				ADDNODE(n_add);
 
 			} else {
 				// We are removing this node if it exists
 				Node* n_remove = REMOVENODE(random_key);
 				
+				// Don't care if this is successful - count the operation anyway
 				if (n_remove != NULL) {
 					// Add to reuseQ
 					n_remove->left = NULL;
@@ -351,16 +448,20 @@ int main()
 	cout << setw(9) << "nt";
 	cout << setw(10) << "rt";
 	cout << setw(14) << "ops";
+	cout << setw(14) << "ops/sec";
 	cout << setw(12) << "rel";
 	cout << setw(14) << "treeSize";
+	cout << setw(14) << "balanced";
 	cout << endl;
 
 	cout << "-----";              // current bound
 	cout << setw(9) << "--";	  // num threads
 	cout << setw(10) << "--";     // runtime  
 	cout << setw(14) << "---";    // operations
+	cout << setw(14) << "---";    // operations per sec
 	cout << setw(12) << "---";    // relative proportion of operations compared to 1 thread
 	cout << setw(14) << "------"; // size of the tree
+	cout << setw(14) << "------"; // is tree balanced
 	cout << endl;
 
     //
@@ -371,7 +472,9 @@ int main()
 
 	for (current_bound = 0; current_bound < sizeof(key_ranges)/sizeof(int); current_bound++) {
 		
-		for (int nt = 1; nt <= maxThread; nt++, indx++) {
+		// Double the number of threads we are using, up to 2*ncpu
+		for (int nt = 1; nt <= maxThread; nt*=2, indx++) {
+			
 			// Half-fill the binary tree to start with, within the range of values given.
 			prefillBinaryTree(0, key_ranges[current_bound]);
 
@@ -418,8 +521,12 @@ int main()
 			cout << setw(8) << nt;
 			cout << setw(10) << fixed << setprecision(2) << (double)rt / 1000;
 			cout << setw(14) << r[indx].ops;
+			cout << setw(14) << r[indx].ops/r[indx].rt;
 			cout << setw(12) << fixed << setprecision(2) << (double)r[indx].ops / ops1;
 			cout << setw(14) << tree->sizeOfTree(tree->root);
+			bool balanced = tree->checkTreeBalanced();
+			if (balanced) cout << setw(14) << "Yes";
+			else cout << setw(14) << "No";
 
 
 #if TREETYP == 3

@@ -120,12 +120,12 @@ int BST::sizeOfTree(Node *node) {
 	return (sizeOfTree(node->left) + 1 + sizeOfTree(node->right));
 }
 
-/*void BST::deleteTree(Node volatile *next) {
+void BST::deleteTree(Node volatile *next) {
 	if (next != NULL) {
 		deleteTree(next->left);
 		deleteTree(next->right);
 	}
-}*/
+}
 
 
 int BST::computeHeight(Node *n) {
@@ -188,6 +188,7 @@ void BST::releaseLock() {
 void BST::acquireHLE() {
 #ifdef WIN32
 	while (_InterlockedExchange_HLEAcquire(&lock, 1) == 1) {
+		nabort++;
 		do {
 			_mm_pause();
 		} while (lock == 1);
