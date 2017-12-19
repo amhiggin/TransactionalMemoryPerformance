@@ -23,7 +23,7 @@ using namespace std;                            // cout
 // Enum constants
 #define TRANSACTION 0
 #define LOCK 1
-#define MAXATTEMPT 8
+#define MAXATTEMPT 2
 
 #define COUNTER64                               // comment for 32 bit counter
 //#define FALSESHARING                          // allocate counters in same cache line
@@ -54,6 +54,8 @@ int maxThread;                                  // max # of threads
 
 THREADH *threadH;                               // thread handles
 UINT64 *ops;                                    // for ops per thread
+UINT64 *adds;
+UINT64 *removes;
 
 #if TREETYP == 3
 UINT64 *aborts;                                 // for counting aborts
@@ -66,6 +68,8 @@ typedef struct {
     UINT64 ops;                                 // ops
     UINT64 incs;                                // should be equal ops
     UINT64 aborts;                              //
+	UINT64 adds;                              //
+	UINT64 removes;                              //
 } Result;
 
 Result *r;                                      // results
@@ -264,11 +268,11 @@ void prefillBinaryTree(int min_value, int max_value) {
 
 // ReuseQ is used to prevent unnecessary inhibition of parallelism from calls to Malloc.
 queue<Node*> make_empty_reuseq() {
-	queue<Node*> ReuseQueue;
+	queue<Node*> reuseQueue;
 	for (int i = 0; i < REUSEQ_SIZE; i++) {
-		ReuseQueue.push(new Node(0));
+		reuseQueue.push(new Node(0));
 	}
-	return ReuseQueue;
+	return reuseQueue;
 }
 
 //
@@ -277,6 +281,8 @@ queue<Node*> make_empty_reuseq() {
 WORKER worker(void *vthread)
 {
     int thread = (int)((size_t) vthread);
+	adds[thread] = 0;
+	removes[thread] = 0;
 
     UINT64 n = 0;
 
@@ -284,7 +290,7 @@ WORKER worker(void *vthread)
     volatile VINT *gs = GINDX(maxThread);
 
 	// Make our reuseQ for this worker
-	queue<Node*> ReuseQueue = make_empty_reuseq();
+	queue<Node*> reuseQueue = make_empty_reuseq();
 	
     runThreadOnCPU(thread % ncpu);
 
@@ -298,10 +304,10 @@ WORKER worker(void *vthread)
 			if (update == 1) {
 				Node *n_add;
 
-				if (!ReuseQueue.empty()) {
+				if (!reuseQueue.empty()) {
 					// Take a node off the reuseQ to enhance performance
-					n_add = ReuseQueue.front();
-					ReuseQueue.pop();
+					n_add = reuseQueue.front();
+					reuseQueue.pop();
 					// Overwrite with our key
 					n_add->key = random_key;
 				} else {
@@ -310,17 +316,19 @@ WORKER worker(void *vthread)
 				}
 				// Don't care if this is successful - count the operation anyway
 				ADDNODE(n_add);
+				adds[thread]++;
 
 			} else {
 				// We are removing this node if it exists
 				Node* n_remove = REMOVENODE(random_key);
+				removes[thread]++;
 				
 				// Don't care if this is successful - count the operation anyway
 				if (n_remove != NULL) {
 					// Add to reuseQ
 					n_remove->left = NULL;
 					n_remove->right = NULL;
-					ReuseQueue.push(n_remove);
+					reuseQueue.push(n_remove);
 				}
 			}
 		}
@@ -421,6 +429,8 @@ int main()
     //
     threadH = (THREADH*) ALIGNED_MALLOC(maxThread*sizeof(THREADH), lineSz);             // thread handles
     ops = (UINT64*) ALIGNED_MALLOC(maxThread*sizeof(UINT64), lineSz);                   // for ops per thread
+	adds = (UINT64*)ALIGNED_MALLOC(maxThread * sizeof(UINT64), lineSz);                   // for adds performed per thread
+	removes = (UINT64*)ALIGNED_MALLOC(maxThread * sizeof(UINT64), lineSz);                   // for removes performed per thread
 
 #if TREETYP == 3
     aborts = (UINT64*) ALIGNED_MALLOC(maxThread*sizeof(UINT64), lineSz);                // for counting aborts
@@ -451,6 +461,8 @@ int main()
 	cout << setw(14) << "ops/sec";
 	cout << setw(12) << "rel";
 	cout << setw(14) << "treeSize";
+	cout << setw(14) << "adds";
+	cout << setw(14) << "removes";
 	cout << setw(14) << "balanced";
 	cout << endl;
 
@@ -461,6 +473,8 @@ int main()
 	cout << setw(14) << "---";    // operations per sec
 	cout << setw(12) << "---";    // relative proportion of operations compared to 1 thread
 	cout << setw(14) << "------"; // size of the tree
+	cout << setw(14) << "------"; // number of adds
+	cout << setw(14) << "------"; // number of removes
 	cout << setw(14) << "------"; // is tree balanced
 	cout << endl;
 
@@ -509,6 +523,8 @@ int main()
 			{
 				r[indx].ops += ops[thread];
 				r[indx].incs += *(GINDX(thread));
+				r[indx].adds += adds[thread];
+				r[indx].removes += removes[thread];
 			}
 			r[indx].incs += *(GINDX(maxThread));
 			if ((sharing == 0) && (nt == 1))
@@ -524,6 +540,8 @@ int main()
 			cout << setw(14) << r[indx].ops/r[indx].rt;
 			cout << setw(12) << fixed << setprecision(2) << (double)r[indx].ops / ops1;
 			cout << setw(14) << tree->sizeOfTree(tree->root);
+			cout << setw(14) << r[indx].adds;
+			cout << setw(14) << r[indx].removes;
 			bool balanced = tree->checkTreeBalanced();
 			if (balanced) cout << setw(14) << "Yes";
 			else cout << setw(14) << "No";
