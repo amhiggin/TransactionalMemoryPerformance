@@ -81,15 +81,17 @@ UINT64 cnt3;                                    // NB: in Debug mode allocated i
 												*/
 
 
-#define TREETYP	1							//set up tree type
+#define TREETYP	0							//set up tree type
 
 #if TREETYP == 0
 #define TREESTR "BST_LOCK"
+#define BST_LOCK
 #define ADDNODE(n)			addNodeTATASLock(n);
 #define REMOVENODE(key)		removeNodeTATASLock(key);
 
 #elif TREETYP == 1
 #define TREESTR "BST__HLE"
+#define BST_HLE
 #define ADDNODE(n)			addNodeHLE(n);
 #define REMOVENODE(key)		removeNodeHLE(key);
 
@@ -100,20 +102,11 @@ UINT64 cnt3;                                    // NB: in Debug mode allocated i
 
 #endif
 
+#ifdef BST_LOCK
 void addNodeTATASLock(Node* n) {
 	tree->acquireLock();
 	tree->insertNode(n);
 	tree->releaseLock();
-}
-
-void addNodeHLE(Node* n) {
-	tree->acquireHLE();
-	tree->insertNode(n);
-	tree->releaseHLE();
-}
-
-void addNodeRTM(Node* n) {
-	// TODO implement
 }
 
 Node* removeNodeTATASLock(int key) {
@@ -122,6 +115,14 @@ Node* removeNodeTATASLock(int key) {
 	tree->releaseLock();
 	return removed;
 }
+#endif
+#ifdef BST_HLE
+void addNodeHLE(Node* n) {
+	tree->acquireHLE();
+	tree->insertNode(n);
+	tree->releaseHLE();
+}
+
 
 Node* removeNodeHLE(int key) {
 	tree->acquireHLE();
@@ -130,10 +131,17 @@ Node* removeNodeHLE(int key) {
 	return removed;
 }
 
+#endif
+#ifdef BST_RTM
+void addNodeRTM(Node* n) {
+	// TODO implement
+}
+
 Node* removeNodeRTM(int key) {
 	// TODO implement
 	return NULL;
 }
+#endif
 
 // This method of generating random key taken from https://stackoverflow.com/questions/5008804/generating-random-integer-from-a-range
 int generateRandomKey() {

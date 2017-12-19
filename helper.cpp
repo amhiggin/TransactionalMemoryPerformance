@@ -7,11 +7,13 @@
 #include <iostream>         // cout
 #include <iomanip>          // setprecision
 #include "helper.h"         //
-#include <tchar.h>
+#include "stdafx.h"
+#include <locale>
 
 #ifdef WIN32
 #include <conio.h>          // _getch()
 #include <psapi.h>          // GetProcessMemoryInfo
+#include <tchar.h>
 #include <Windows.h>	    // pre-compiled headers
 #elif __linux__
 #include <termios.h>        //

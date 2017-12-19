@@ -1,7 +1,10 @@
 #include <iostream>
 #include <string.h>
 #include "BST.h"
+#include <cmath>
+#ifdef WIN32
 #include <intrin.h>
+#endif
 #include "helper.h"
 
 using namespace std;
@@ -9,9 +12,7 @@ using namespace std;
 BST::BST() {
 	root = NULL;
 	lock = 0;
-#ifndef BST_HLE || BST_RTM
 	nabort = 0;
-#endif
 	return;
 }
 
@@ -127,10 +128,42 @@ int BST::sizeOfTree(Node *node) {
 }*/
 
 
+int BST::computeHeight(Node *n) {
+	if (n == NULL) {
+		return 0;
+	}
+	// Recurse down left and right subtrees
+	int leftChildHeight = computeHeight(n->left);
+	if (leftChildHeight == -1) {
+		return -1;
+	}
+	
+	int rightChildHeight = computeHeight(n->right);
+	if (rightChildHeight == -1) {
+		return -1;
+	}
+	
+	int difference = leftChildHeight - rightChildHeight;
+
+	if (abs(difference) > 1) {
+		return -1;
+	}
+	else {
+		return max(leftChildHeight, rightChildHeight) + 1;
+	}
+}
+
+bool BST::checkTreeBalanced() {
+	if (computeHeight(root) == -1){
+		return false;
+	}
+	return true;
+}
+
+
 /*
 	TATAS Lock methods.
 */
-#ifndef BST_LOCK
 void BST::acquireLock() {
 #ifdef WIN32
 while (InterlockedExchange(&lock, 1)) // try for lock
@@ -146,13 +179,12 @@ while (InterlockedExchange(&lock, 1)) // try for lock
 void BST::releaseLock() {
 	lock = 0;
 }
-#endif
 
 
 /*
 	HLE Methods.
 */
-#ifndef BST_HLE
+
 void BST::acquireHLE() {
 #ifdef WIN32
 	while (_InterlockedExchange_HLEAcquire(&lock, 1) == 1) {
@@ -177,7 +209,6 @@ void BST::releaseHLE() {
 	__atomic_store_n(&lock, 0, __ATOMIC_RELEASE | __ATOMIC_HLE_RELEASE);
 #endif
 }
-#endif
 
 
 
