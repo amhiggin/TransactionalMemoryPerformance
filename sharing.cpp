@@ -18,7 +18,7 @@ using namespace std;                            // cout
 #define GB          (K*K*K)                     //
 #define NOPS        10000                       //
 #define NSECONDS    2                           // run each test for NSECONDS
-#define REUSEQ_SIZE 1000
+#define REUSEQ_SIZE 100000
 
 // Enum constants
 #define TRANSACTION 0
@@ -70,7 +70,6 @@ typedef struct {
     UINT64 aborts;                              //
 	UINT64 adds;                              //
 	UINT64 removes;                              //
-	UINT64 bound;                              //
 } Result;
 
 Result *r;                                      // results
@@ -92,7 +91,7 @@ UINT64 cnt3;                                    // NB: in Debug mode allocated i
 */
 
 
-#define TREETYP	0							//set up tree type
+#define TREETYP	2							//set up tree type
 
 #if TREETYP == 0
 #define TREESTR "BST_LOCK"
@@ -247,7 +246,7 @@ Node* removeNodeRTM(int key) {
 int generateRandomKey() {
 	std::random_device rd;     // only used once to initialise (seed) engine
 	std::mt19937 rng(rd());    // random-number engine used (Mersenne-Twister in this case)
-	std::uniform_int_distribution<int> uni(-1, key_ranges[current_bound] - 1); // guaranteed unbiased
+	std::uniform_int_distribution<int> uni(0, key_ranges[current_bound]); // guaranteed unbiased
 
 	auto random_key = uni(rng);
 	return random_key;
@@ -533,7 +532,6 @@ int main()
 			r[indx].sharing = sharing;
 			r[indx].nt = nt;
 			r[indx].rt = rt;
-			r[indx].bound = key_ranges[current_bound];
 
 			cout << setw(8) << key_ranges[current_bound];
 			cout << setw(8) << nt;
@@ -563,19 +561,11 @@ int main()
         }
 
     }
-	//
-	// output results so they can easily be pasted into a spread sheet from console window
-	//
-	setLocale();
-	cout << "bound/ops sec/nt";
 
-	cout << endl;
-	for (UINT i = 0; i < indx; i++) {
-		cout << r[i].bound << "/" << r[i].ops / r[i].rt << "/" << r[i].nt;
-		cout << endl;
-	}
-	cout << endl;
+    cout << endl;
 
-	quit();
+    quit();
+
+    return 0;
 
 }

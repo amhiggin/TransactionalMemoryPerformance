@@ -166,15 +166,13 @@ bool BST::checkTreeBalanced() {
 */
 void BST::acquireLock() {
 #ifdef WIN32
-	do {
+while (InterlockedExchange(&lock, 1)) // try for lock
 		while (lock == 1) // wait until lock free
-			_mm_pause(); // intrinsic see next slide
-	} while (InterlockedExchange(&lock, 1)); // try for lock
+			_mm_pause(); // instrinsic see next slide
 #elif __linux__
-	do {
-		while (lock == 1) // wait until lock free
-			_mm_pause(); // intrinsic see next slide
-	} while (__sync_lock_test_and_set(&lock, 1)); // try for lock
+	while (__sync_lock_test_and_set(&lock, 1))
+		while (lock == 1)
+			_mm_pause();
 #endif
 }
 
