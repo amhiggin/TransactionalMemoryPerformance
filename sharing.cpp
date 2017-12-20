@@ -54,6 +54,8 @@ int maxThread;                                  // max # of threads
 
 THREADH *threadH;                               // thread handles
 UINT64 *ops;                                    // for ops per thread
+UINT64 *adds;
+UINT64 *removes;
 
 #if TREETYP == 3
 UINT64 *aborts;                                 // for counting aborts
@@ -64,6 +66,8 @@ typedef struct {
     int nt;                                     // # threads
     UINT64 rt;                                  // run time (ms)
     UINT64 ops;                                 // ops
+	UINT64 adds;                                 // ops
+	UINT64 removes;                                 // ops
     UINT64 incs;                                // should be equal ops
     UINT64 aborts;                              //
 } Result;
@@ -279,6 +283,8 @@ WORKER worker(void *vthread)
     int thread = (int)((size_t) vthread);
 
     UINT64 n = 0;
+	UINT64 added = 0;
+	UINT64 removed = 0;
 
     volatile VINT *gt = GINDX(thread);
     volatile VINT *gs = GINDX(maxThread);
@@ -310,17 +316,21 @@ WORKER worker(void *vthread)
 				}
 				// Don't care if this is successful - count the operation anyway
 				ADDNODE(n_add);
+				added++;
 
 			} else {
 				// We are removing this node if it exists
 				Node* n_remove = REMOVENODE(random_key);
+				removed++;
 				
 				// Don't care if this is successful - count the operation anyway
 				if (n_remove != NULL) {
 					// Add to reuseQ
 					n_remove->left = NULL;
 					n_remove->right = NULL;
-					ReuseQueue.push(n_remove);
+					if (ReuseQueue.size() < REUSEQ_SIZE) {
+						ReuseQueue.push(n_remove);
+					}
 				}
 			}
 		}
@@ -335,6 +345,8 @@ WORKER worker(void *vthread)
     }
 
     ops[thread] = n;
+	adds[thread] = added;
+	removes[thread] = removed;
 
 #if TREETYP == 3
     aborts[thread] = nabort;
@@ -421,6 +433,8 @@ int main()
     //
     threadH = (THREADH*) ALIGNED_MALLOC(maxThread*sizeof(THREADH), lineSz);             // thread handles
     ops = (UINT64*) ALIGNED_MALLOC(maxThread*sizeof(UINT64), lineSz);                   // for ops per thread
+	adds = (UINT64*)ALIGNED_MALLOC(maxThread * sizeof(UINT64), lineSz);                   // for ops per thread
+	removes = (UINT64*)ALIGNED_MALLOC(maxThread * sizeof(UINT64), lineSz);                   // for ops per thread
 
 #if TREETYP == 3
     aborts = (UINT64*) ALIGNED_MALLOC(maxThread*sizeof(UINT64), lineSz);                // for counting aborts
@@ -448,6 +462,8 @@ int main()
 	cout << setw(9) << "nt";
 	cout << setw(10) << "rt";
 	cout << setw(14) << "ops";
+	cout << setw(14) << "adds";
+	cout << setw(14) << "removes";
 	cout << setw(14) << "ops/sec";
 	cout << setw(12) << "rel";
 	cout << setw(14) << "treeSize";
@@ -458,6 +474,8 @@ int main()
 	cout << setw(9) << "--";	  // num threads
 	cout << setw(10) << "--";     // runtime  
 	cout << setw(14) << "---";    // operations
+	cout << setw(14) << "---";    // adds
+	cout << setw(14) << "---";    // removes
 	cout << setw(14) << "---";    // operations per sec
 	cout << setw(12) << "---";    // relative proportion of operations compared to 1 thread
 	cout << setw(14) << "------"; // size of the tree
@@ -508,9 +526,9 @@ int main()
 			for (int thread = 0; thread < nt; thread++)
 			{
 				r[indx].ops += ops[thread];
-				r[indx].incs += *(GINDX(thread));
+				r[indx].adds += adds[thread];
+				r[indx].removes += removes[thread];
 			}
-			r[indx].incs += *(GINDX(maxThread));
 			if ((sharing == 0) && (nt == 1))
 				ops1 = r[indx].ops;
 			r[indx].sharing = sharing;
@@ -521,7 +539,9 @@ int main()
 			cout << setw(8) << nt;
 			cout << setw(10) << fixed << setprecision(2) << (double)rt / 1000;
 			cout << setw(14) << r[indx].ops;
-			cout << setw(14) << r[indx].ops/r[indx].rt;
+			cout << setw(14) << r[indx].adds;
+			cout << setw(14) << r[indx].removes;
+			cout << setw(14) << r[indx].ops/ ((double)rt / 1000);
 			cout << setw(12) << fixed << setprecision(2) << (double)r[indx].ops / ops1;
 			cout << setw(14) << tree->sizeOfTree(tree->root);
 			bool balanced = tree->checkTreeBalanced();
